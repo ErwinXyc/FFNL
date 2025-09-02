@@ -125,22 +125,18 @@ class LightweightChannelAttention(nn.Module):
 class LightweightSPP(nn.Module):
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        # 只使用2个尺度以减少计算量
         total_channels = in_channels * 3  # in_channels + 2*in_channels
         self.conv = nn.Conv2d(total_channels, out_channels, 1, bias=False)
         self.bn = nn.BatchNorm2d(out_channels)
         self.relu = nn.SiLU(inplace=True)
     def forward(self, x):
         size = x.size()
-        # 只使用2个尺度的池化
         pool1 = F.adaptive_avg_pool2d(x, (1, 1))
         pool2 = F.adaptive_avg_pool2d(x, (2, 2))
         
-        # 上采样到相同尺寸
         pool1 = F.interpolate(pool1, size=(size[2], size[3]), mode='bilinear', align_corners=False)
         pool2 = F.interpolate(pool2, size=(size[2], size[3]), mode='bilinear', align_corners=False)
         
-        # 拼接并融合
         out = torch.cat([x, pool1, pool2], dim=1)
         out = self.conv(out)
         out = self.relu(self.bn(out))
@@ -171,13 +167,10 @@ class LightweightPatchAttention(nn.Module):
         x_patches = x.unfold(2, ph, ph).unfold(3, pw, pw)
         nH, nW = x_patches.shape[2], x_patches.shape[3]
         x_patches = x_patches.contiguous().view(B, C, nH * nW, ph, pw)
-        # LayerNorm on C
         x_patches = x_patches.permute(0,2,3,4,1).contiguous()  # (B, N, ph, pw, C)
         x_patches = self.norm(x_patches)
         x_patches = x_patches.permute(0,4,1,2,3).contiguous()  # (B, C, N, ph, pw)
-        # patch均值 (B, C, N)
         patch_mean = x_patches.mean(dim=(3,4))  # (B, C, N)
-        # MLP通道注意力 (B, C, N) -> (B, C, N)
         attn_weights = self.attn(patch_mean.transpose(1,2))  # (B, N, C)
         attn_weights = attn_weights.transpose(1,2).unsqueeze(-1).unsqueeze(-1)  # (B, C, N, 1, 1)
         x_patches = x_patches * attn_weights
@@ -215,19 +208,18 @@ class TiedSELayer(nn.Module):
                 nn.Linear(channel, max(2, channel//reduction)),
                 nn.SiLU(inplace=True),
                 nn.Linear(max(2, channel//reduction), channel),
-                nn.Tanh()  # 使用Tanh替代Sigmoid，提供更灵活的权重范围
+                nn.Tanh() 
         )
     def forward(self, x):
         b, c, _, _ = x.size()
         y = self.avg_pool(x).view(b*self.B, c//self.B)
-        y = self.norm(y)  # 添加LayerNorm
+        y = self.norm(y)  
         y = self.fc(y).view(b, c, 1, 1)
-        # 添加残差连接，增强梯度流动
-        return x * y + x * 0.5  # 0.5为残差权重，在注意力和残差间取得平衡
+        return x * y + x * 0.5  
 
 # SEAttention
 class SEAttention(nn.Module):
-    """标准SE注意力模块 - 来自SE-test.py"""
+    """标准SE注意力模块 """
     def __init__(self, channel=512, reduction=16):
         super().__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
@@ -239,7 +231,6 @@ class SEAttention(nn.Module):
         )
 
     def init_weights(self):
-        """初始化权重"""
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out')
